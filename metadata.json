@@ -1,0 +1,6 @@
+{
+  "name": "ULTRON AI Assistant",
+  "description": "Futuristic AI Assistant with animated core, wake word 'Ultron' detection, Android Back action via AccessibilityService, and 'Yes, Tony.' voice response.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

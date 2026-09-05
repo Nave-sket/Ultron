@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">ULTRON AI Assistant</string>
+    <string name="accessibility_service_name">ULTRON Back Action Service</string>
+    <string name="accessibility_service_description">Enables ULTRON AI Assistant to trigger the system Back navigation action when the \'Ultron\' wake word is detected.</string>
+    <string name="notification_channel_name">ULTRON Voice Service</string>
+    <string name="notification_channel_description">Persistent service maintaining continuous wake word detection for ULTRON</string>
+    <string name="notification_title">ULTRON AI Assistant Active</string>
+    <string name="notification_text">Listening for wake word \'Ultron\'…</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_test">Test Wake</string>
+</resources>
