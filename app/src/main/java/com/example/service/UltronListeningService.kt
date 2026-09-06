@@ -1,5 +1,6 @@
 package com.example.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,12 +8,14 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.audio.UltronWakeWordDetector
@@ -35,9 +38,14 @@ class UltronListeningService : Service() {
         acquireWakeLock()
 
         wakeWordDetector = UltronWakeWordDetector(this) { detectedPhrase ->
-            Log.i(TAG, "Wake word matched: $detectedPhrase")
+            Log.i(TAG, "Speech matched: $detectedPhrase")
             wakeWordDetector?.pauseForSpeech()
-            UltronAssistantManager.onWakeWordDetected("VOICE")
+            if (UltronAssistantManager.isAwaitingCommandAfterGreeting.value) {
+                // Ultron previously greeted Tony with "Yes, Tony." and is now receiving the actual directive
+                UltronAssistantManager.sendUserQuery(detectedPhrase)
+            } else {
+                UltronAssistantManager.onWakeWordDetected("VOICE")
+            }
         }
 
         Log.i(TAG, "UltronListeningService created")
@@ -67,16 +75,36 @@ class UltronListeningService : Service() {
     }
 
     private fun startForegroundWithNotification() {
+        val hasMicPermission = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
         val notification = buildForegroundNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // In Android 14+ (targetSdk 34+), foregroundServiceType="microphone" strictly requires
+                // RECORD_AUDIO runtime permission and eligible app state.
+                // If RECORD_AUDIO is not granted yet, we fallback to general foreground type (0)
+                // so the service does not crash with SecurityException.
+                val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && hasMicPermission) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                } else {
+                    0
+                }
+                startForeground(NOTIFICATION_ID, notification, serviceType)
             } else {
-                0
+                startForeground(NOTIFICATION_ID, notification)
             }
-            startForeground(NOTIFICATION_ID, notification, serviceType)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        } catch (se: SecurityException) {
+            Log.e(TAG, "SecurityException starting foreground service: ${se.message}. Falling back to standard foreground.")
+            try {
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start foreground service: ${e.message}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in startForeground: ${e.message}")
         }
     }
 

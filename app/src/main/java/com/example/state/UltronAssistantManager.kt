@@ -8,11 +8,16 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import com.example.audio.UltronVoiceEngine
+import com.example.model.ChatMessage
 import com.example.service.UltronAccessibilityService
+import com.example.service.UltronCommandProcessor
+import com.example.service.UltronCommandResult
+import com.example.service.UltronDeviceNetworkManager
 import com.example.service.UltronListeningService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,7 +32,10 @@ enum class AssistantState {
     LISTENING,
     WAKE_DETECTED,
     PROCESSING_BACK,
-    SPEAKING
+    THINKING,
+    EXECUTING,
+    SPEAKING,
+    ERROR
 }
 
 data class UltronLogItem(
@@ -36,6 +44,12 @@ data class UltronLogItem(
     val message: String,
     val isSuccess: Boolean = true,
     val tag: String = "INFO"
+)
+
+data class PendingConfirmation(
+    val actionName: String,
+    val prompt: String,
+    val intent: Intent
 )
 
 object UltronAssistantManager {
@@ -77,6 +91,16 @@ object UltronAssistantManager {
     private val _logs = MutableStateFlow<List<UltronLogItem>>(emptyList())
     val logs: StateFlow<List<UltronLogItem>> = _logs.asStateFlow()
 
+    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
+
+    private val _pendingConfirmation = MutableStateFlow<PendingConfirmation?>(null)
+    val pendingConfirmation: StateFlow<PendingConfirmation?> = _pendingConfirmation.asStateFlow()
+
+    // Mode: Whether Ultron has greeted "Yes, Tony." and is now actively listening for the command
+    private val _isAwaitingCommandAfterGreeting = MutableStateFlow(false)
+    val isAwaitingCommandAfterGreeting: StateFlow<Boolean> = _isAwaitingCommandAfterGreeting.asStateFlow()
+
     private var appContext: Context? = null
 
     fun initialize(context: Context) {
@@ -106,6 +130,18 @@ object UltronAssistantManager {
                 }
             }
         }
+
+        // Initialize device network
+        UltronDeviceNetworkManager.initialize(context)
+
+        // Seed initial welcoming message in Chat
+        _chatMessages.value = listOf(
+            ChatMessage(
+                sender = "ULTRON",
+                message = "ULTRON Holographic Core online. Ready for vocal directives or neural input.",
+                timestamp = timeFormat.format(Date())
+            )
+        )
 
         addLog("ULTRON AI Assistant initialized. Core systems online.", isSuccess = true, tag = "SYSTEM")
     }
@@ -140,25 +176,35 @@ object UltronAssistantManager {
         if (enabled) {
             _assistantState.value = AssistantState.LISTENING
             addLog("Master switch engaged. Starting foreground voice detection...", isSuccess = true, tag = "SERVICE")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start UltronListeningService: ${e.message}", e)
+                addLog("Could not start service: ${e.message}", isSuccess = false, tag = "ERROR")
             }
         } else {
             _assistantState.value = AssistantState.OFF
-            _rmsLevel.value = 0f
+            _isAwaitingCommandAfterGreeting.value = false
             addLog("Master switch disengaged. Listening suspended.", isSuccess = true, tag = "SERVICE")
-            context.stopService(intent)
+            try {
+                context.stopService(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to stop UltronListeningService: ${e.message}", e)
+            }
         }
     }
 
     /**
-     * Executes the core CUJ:
+     * Executes the Core CUJ:
      * 1. Detects "Ultron"
      * 2. Shows activation animation ("ULTRON ACTIVATED")
      * 3. Triggers Android Back action via AccessibilityService
      * 4. Speaks: "Yes, Tony."
+     * 5. CRITICAL: Keeps listening for the user's actual request (e.g. "Open YouTube", "Call Dad", "Weather")
      */
     fun onWakeWordDetected(source: String = "VOICE") {
         val context = appContext ?: return
@@ -169,7 +215,7 @@ object UltronAssistantManager {
         scope.launch {
             // Activation state: Core expands, rings spin fast, displays "ULTRON ACTIVATED"
             _assistantState.value = AssistantState.WAKE_DETECTED
-            kotlinx.coroutines.delay(400L)
+            delay(400L)
 
             // Step 2: Trigger Android Back action
             _assistantState.value = AssistantState.PROCESSING_BACK
@@ -177,28 +223,148 @@ object UltronAssistantManager {
 
             if (backSuccess) {
                 addLog("Android Back action executed successfully", isSuccess = true, tag = "ACTION")
-                _assistantState.value = AssistantState.SPEAKING
-
-                // Step 3: Speak exactly: "Yes, Tony."
-                voiceEngine?.speakResponse("Yes, Tony.") {
-                    scope.launch {
-                        addLog("ULTRON response voiced: \"Yes, Tony.\"", isSuccess = true, tag = "VOICE")
-                        _assistantState.value = if (_isMasterSwitchOn.value) AssistantState.LISTENING else AssistantState.STANDBY
-                        UltronListeningService.resumeDetectorAfterSpeech()
-                    }
-                }
             } else {
                 val isEnabled = UltronAccessibilityService.isAccessibilityServiceEnabled(context)
-                val reason = if (!isEnabled) {
-                    "Accessibility Service is NOT enabled in system settings"
-                } else {
-                    "Service running but Back action rejected by OS"
+                val reason = if (!isEnabled) "Accessibility Service disabled in system settings" else "Back action rejected by OS"
+                addLog("Back action notice: $reason", isSuccess = false, tag = "STATUS")
+            }
+
+            _assistantState.value = AssistantState.SPEAKING
+
+            // Step 3: Speak exactly: "Yes, Tony."
+            voiceEngine?.speakResponse("Yes, Tony.") {
+                scope.launch {
+                    addLog("ULTRON response voiced: \"Yes, Tony.\"", isSuccess = true, tag = "VOICE")
+
+                    // Step 4: Keep listening for the user's follow-up command
+                    _isAwaitingCommandAfterGreeting.value = true
+                    _assistantState.value = AssistantState.LISTENING
+                    UltronListeningService.resumeDetectorAfterSpeech()
                 }
-                addLog("Failed to perform Back: $reason", isSuccess = false, tag = "ERROR")
-                _assistantState.value = if (_isMasterSwitchOn.value) AssistantState.LISTENING else AssistantState.STANDBY
-                UltronListeningService.resumeDetectorAfterSpeech()
             }
         }
+    }
+
+    /**
+     * Dispatches any user query (from voice follow-up or typed input)
+     */
+    fun sendUserQuery(rawText: String) {
+        val context = appContext ?: return
+        val userQuery = rawText.trim()
+        if (userQuery.isEmpty()) return
+
+        // If user just said "Ultron" alone, trigger standard greeting
+        if (userQuery.equals("ultron", ignoreCase = true)) {
+            onWakeWordDetected("MANUAL_INPUT")
+            return
+        }
+
+        // Add to Chat history
+        val now = timeFormat.format(Date())
+        _chatMessages.value = _chatMessages.value + ChatMessage(
+            sender = "USER",
+            message = userQuery,
+            timestamp = now
+        )
+
+        addLog("Processing directive: \"$userQuery\"", isSuccess = true, tag = "USER")
+        _assistantState.value = AssistantState.THINKING
+        _isAwaitingCommandAfterGreeting.value = false
+
+        scope.launch {
+            delay(350L) // holographic thinking animation
+            val result = UltronCommandProcessor.processCommand(userQuery, context)
+
+            when (result) {
+                is UltronCommandResult.VoiceOnly -> {
+                    _assistantState.value = AssistantState.SPEAKING
+                    addLog(result.response, isSuccess = true, tag = "ULTRON")
+                    _chatMessages.value = _chatMessages.value + ChatMessage(
+                        sender = "ULTRON",
+                        message = result.response,
+                        timestamp = timeFormat.format(Date())
+                    )
+                    voiceEngine?.speakResponse(result.response) {
+                        scope.launch {
+                            _assistantState.value = if (_isMasterSwitchOn.value) AssistantState.LISTENING else AssistantState.STANDBY
+                            UltronListeningService.resumeDetectorAfterSpeech()
+                        }
+                    }
+                }
+
+                is UltronCommandResult.ActionExecuted -> {
+                    _assistantState.value = AssistantState.EXECUTING
+                    addLog("[${result.actionName}] ${result.response}", isSuccess = true, tag = "ACTION")
+                    _chatMessages.value = _chatMessages.value + ChatMessage(
+                        sender = "ULTRON",
+                        message = result.response,
+                        timestamp = timeFormat.format(Date()),
+                        actionTag = result.actionName
+                    )
+                    delay(300L)
+                    _assistantState.value = AssistantState.SPEAKING
+                    voiceEngine?.speakResponse(result.response) {
+                        scope.launch {
+                            _assistantState.value = if (_isMasterSwitchOn.value) AssistantState.LISTENING else AssistantState.STANDBY
+                            UltronListeningService.resumeDetectorAfterSpeech()
+                        }
+                    }
+                }
+
+                is UltronCommandResult.ConfirmationRequired -> {
+                    _assistantState.value = AssistantState.SPEAKING
+                    _pendingConfirmation.value = PendingConfirmation(
+                        actionName = result.actionName,
+                        prompt = result.prompt,
+                        intent = result.confirmIntent
+                    )
+                    _chatMessages.value = _chatMessages.value + ChatMessage(
+                        sender = "ULTRON",
+                        message = result.prompt,
+                        timestamp = timeFormat.format(Date()),
+                        actionTag = "CONFIRMATION_REQUIRED",
+                        requiresConfirmation = true
+                    )
+                    voiceEngine?.speakResponse(result.prompt) {
+                        scope.launch {
+                            _assistantState.value = if (_isMasterSwitchOn.value) AssistantState.LISTENING else AssistantState.STANDBY
+                            UltronListeningService.resumeDetectorAfterSpeech()
+                        }
+                    }
+                }
+
+                is UltronCommandResult.OpenUrl -> {
+                    _assistantState.value = AssistantState.EXECUTING
+                    addLog("Launching URL: ${result.url}", isSuccess = true, tag = "ACTION")
+                    _assistantState.value = AssistantState.SPEAKING
+                    voiceEngine?.speakResponse(result.response) {
+                        scope.launch {
+                            _assistantState.value = if (_isMasterSwitchOn.value) AssistantState.LISTENING else AssistantState.STANDBY
+                            UltronListeningService.resumeDetectorAfterSpeech()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun confirmPendingAction() {
+        val conf = _pendingConfirmation.value ?: return
+        val context = appContext ?: return
+        _pendingConfirmation.value = null
+        try {
+            context.startActivity(conf.intent)
+            addLog("Confirmed action executed: ${conf.actionName}", isSuccess = true, tag = "ACTION")
+            voiceEngine?.speakResponse("Executing confirmed directive, Tony.")
+        } catch (e: Exception) {
+            addLog("Could not execute action: ${e.message}", isSuccess = false, tag = "ERROR")
+        }
+    }
+
+    fun cancelPendingAction() {
+        _pendingConfirmation.value = null
+        addLog("Directive canceled by user.", isSuccess = true, tag = "ACTION")
+        voiceEngine?.speakResponse("Directive stood down, Tony.")
     }
 
     /**

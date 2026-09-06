@@ -41,7 +41,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessibilityNew
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VolumeUp
@@ -79,7 +81,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.service.UltronAccessibilityService
 import com.example.state.AssistantState
 import com.example.state.UltronAssistantManager
-import com.example.ui.components.UltronReactorCore
+import com.example.ui.components.MasterPowerSwitch
+import com.example.ui.components.UltronChatDialog
+import com.example.ui.components.UltronDeviceNetworkDialog
+import com.example.ui.components.UltronInteractiveHologramCore
 import com.example.ui.components.UltronSettingsScreen
 import com.example.ui.components.UltronSetupGuideDialog
 import com.example.ui.components.UltronStatusIndicators
@@ -139,6 +144,8 @@ fun UltronApp() {
 
     var showSettingsScreen by remember { mutableStateOf(false) }
     var showSetupGuide by remember { mutableStateOf(false) }
+    var showDeviceNetwork by remember { mutableStateOf(false) }
+    var showChatDialog by remember { mutableStateOf(false) }
 
     // Permission Request Launcher
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -261,6 +268,42 @@ fun UltronApp() {
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Neural AI Chat button
+                        IconButton(
+                            onClick = { showChatDialog = true },
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(UltronSurface)
+                                .testTag("btn_open_chat")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Chat,
+                                contentDescription = "AI Chat & Directives",
+                                tint = UltronNeonCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        // Device Network button
+                        IconButton(
+                            onClick = { showDeviceNetwork = true },
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(UltronSurface)
+                                .testTag("btn_open_device_network")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Hub,
+                                contentDescription = "Device Network",
+                                tint = UltronNeonCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
                         // Settings Button
                         IconButton(
                             onClick = { showSettingsScreen = true },
@@ -277,7 +320,7 @@ fun UltronApp() {
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         // Help / Setup Guide Button
                         IconButton(
@@ -297,14 +340,21 @@ fun UltronApp() {
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // CENTER: Animated ULTRON AI Core
-                UltronReactorCore(
+                // CENTER: Interactive 3D Holographic ULTRON AI Core
+                UltronInteractiveHologramCore(
                     assistantState = assistantState,
                     isMasterOn = isMasterOn,
-                    rmsLevel = rmsLevel,
-                    onToggleMaster = { enable ->
+                    rmsLevel = rmsLevel
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Master Power Switch
+                MasterPowerSwitch(
+                    isOn = isMasterOn,
+                    onToggle = { enable ->
                         if (enable) {
                             if (!isMicGranted) {
                                 checkAndRequestPermissions()
@@ -475,6 +525,18 @@ fun UltronApp() {
         UltronSetupGuideDialog(
             onDismiss = { showSetupGuide = false },
             onOpenAccessibilitySettings = { openAccessibilitySettings() }
+        )
+    }
+
+    if (showDeviceNetwork) {
+        UltronDeviceNetworkDialog(
+            onDismiss = { showDeviceNetwork = false }
+        )
+    }
+
+    if (showChatDialog) {
+        UltronChatDialog(
+            onDismiss = { showChatDialog = false }
         )
     }
 }

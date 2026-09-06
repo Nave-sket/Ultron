@@ -1,7 +1,9 @@
 package com.example.audio
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -9,6 +11,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -115,6 +118,18 @@ class UltronWakeWordDetector(
     private fun startListeningInternal() {
         if (!isEnabled || isPausedForSpeaking) return
 
+        val hasMic = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!hasMic) {
+            Log.w(TAG, "Cannot start speech recognition: RECORD_AUDIO permission not granted yet.")
+            _isListening.value = false
+            scheduleRestart(2000L)
+            return
+        }
+
         try {
             initRecognizerIfNeeded()
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -204,12 +219,19 @@ class UltronWakeWordDetector(
 
     private fun handleSpeechResults(resultsBundle: Bundle?): Boolean {
         val matches = resultsBundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION) ?: return false
+        val isAwaitingCommand = com.example.state.UltronAssistantManager.isAwaitingCommandAfterGreeting.value
+
         for (candidate in matches) {
             val trimmed = candidate.trim()
             if (trimmed.isNotEmpty()) {
                 _lastDetectedPhrase.value = trimmed
             }
-            if (matchesWakeWord(candidate)) {
+            if (isAwaitingCommand) {
+                // If Tony already triggered "Ultron" and Ultron said "Yes, Tony.", process the incoming phrase directly
+                Log.i(TAG, "Command directive captured after greeting: \"$candidate\"")
+                onWakeWordDetected(candidate)
+                return true
+            } else if (matchesWakeWord(candidate)) {
                 Log.i(TAG, "Wake word 'Ultron' detected in: \"$candidate\"")
                 onWakeWordDetected(candidate)
                 return true

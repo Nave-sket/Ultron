@@ -38,6 +38,7 @@ class UltronVoiceEngine(private val context: Context) : TextToSpeech.OnInitListe
     var volume: Float = 1.0f
 
     private var onSpeechDoneCallback: (() -> Unit)? = null
+    private var lastSpokenText: String = "Yes, Tony."
 
     init {
         tts = TextToSpeech(context.applicationContext, this)
@@ -58,11 +59,13 @@ class UltronVoiceEngine(private val context: Context) : TextToSpeech.OnInitListe
             ttsInstance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     _isSpeaking.value = true
+                    UltronLipSyncEngine.startSpeakingAnimation(lastSpokenText)
                     Log.d(TAG, "Speech started: $utteranceId")
                 }
 
                 override fun onDone(utteranceId: String?) {
                     _isSpeaking.value = false
+                    UltronLipSyncEngine.stopSpeakingAnimation()
                     Log.d(TAG, "Speech completed: $utteranceId")
                     onSpeechDoneCallback?.invoke()
                     onSpeechDoneCallback = null
@@ -71,6 +74,7 @@ class UltronVoiceEngine(private val context: Context) : TextToSpeech.OnInitListe
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
                     _isSpeaking.value = false
+                    UltronLipSyncEngine.stopSpeakingAnimation()
                     Log.e(TAG, "Speech error on $utteranceId")
                     onSpeechDoneCallback?.invoke()
                     onSpeechDoneCallback = null
@@ -78,6 +82,7 @@ class UltronVoiceEngine(private val context: Context) : TextToSpeech.OnInitListe
 
                 override fun onError(utteranceId: String?, errorCode: Int) {
                     _isSpeaking.value = false
+                    UltronLipSyncEngine.stopSpeakingAnimation()
                     Log.e(TAG, "Speech error ($errorCode) on $utteranceId")
                     onSpeechDoneCallback?.invoke()
                     onSpeechDoneCallback = null
@@ -129,6 +134,7 @@ class UltronVoiceEngine(private val context: Context) : TextToSpeech.OnInitListe
             return
         }
 
+        lastSpokenText = text
         onSpeechDoneCallback = onComplete
         _isSpeaking.value = true
 
@@ -144,6 +150,7 @@ class UltronVoiceEngine(private val context: Context) : TextToSpeech.OnInitListe
 
     fun stop() {
         tts?.stop()
+        UltronLipSyncEngine.stopSpeakingAnimation()
         _isSpeaking.value = false
     }
 
