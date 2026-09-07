@@ -29,15 +29,13 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build Debug APK (No Signing Needed)
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+      - name: Build Debug APK
+        run: gradle assembleDebug --stacktrace
 
-      - name: Upload Debug APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ultron-debug-apk
+          name: ultron-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
 
@@ -46,7 +44,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: app/build/outputs/apk/debug/app-debug.apk
-          tag_name: v1.0.0-${{ github.run_number }}
+          tag_name: v${{ github.run_number }}
           draft: false
           prerelease: false
         env:
